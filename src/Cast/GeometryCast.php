@@ -4,8 +4,9 @@ namespace Clickbar\Magellan\Cast;
 
 use Clickbar\Magellan\Data\Geometries\Geometry;
 use Clickbar\Magellan\IO\Generator\BaseGenerator;
-use Clickbar\Magellan\IO\Generator\WKT\WKTGenerator;
+use Clickbar\Magellan\IO\Generator\WKB\WKBGenerator;
 use Clickbar\Magellan\IO\Parser\WKB\WKBParser;
+use Clickbar\Magellan\IO\Parser\WKT\WKTParser;
 use Illuminate\Contracts\Database\Eloquent\CastsAttributes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\App;
@@ -21,6 +22,8 @@ class GeometryCast implements CastsAttributes
 {
     protected WKBParser $wkbParser;
 
+    protected WKTParser $wktParser;
+
     protected BaseGenerator $sqlGenerator;
 
     /** @param class-string<T> $geometryClass */
@@ -28,10 +31,12 @@ class GeometryCast implements CastsAttributes
         protected string $geometryClass,
     ) {
         $this->wkbParser = App::make(WKBParser::class);
+        $this->wktParser = App::make(WKTParser::class);
 
-        $generatorClass = config('magellan.sql_generator', WKTGenerator::class);
-        $this->sqlGenerator = new $generatorClass;
-
+        // Always use WKB for casts, to be compatible with database storage
+        // and avoid dirty state due to equality checks on Laravel Models,
+        // when a geometry is filled on the model and compared to the database (WKB) value.
+        $this->sqlGenerator = new WKBGenerator;
     }
 
     /**
@@ -45,7 +50,15 @@ class GeometryCast implements CastsAttributes
             return null;
         }
 
-        $geometry = $this->wkbParser->parse($value);
+        // Detect format: WKB data is hex-encoded, WKT is human-readable text
+        // After serialization, the model contains the WKB value, and we need to
+        // parse it back to a Geometry object using the WKBParser.
+        if (ctype_xdigit($value)) {
+            $geometry = $this->wkbParser->parse($value);
+        } else {
+            $geometry = $this->wktParser->parse($value);
+        }
+
         $this->assertGeometryType($geometry);
 
         return $geometry;
